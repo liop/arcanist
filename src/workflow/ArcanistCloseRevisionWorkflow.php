@@ -35,8 +35,7 @@ EOTEXT
         'help' => pht(
           "Close only if the repository is untracked and the revision is ".
           "accepted. Continue even if the close can't happen. This is a soft ".
-          "version of '' used by other workflows.",
-          'close-revision'),
+          "version of 'close-revision' used by other workflows."),
       ),
       'quiet' => array(
         'help' => pht('Do not print a success message.'),
@@ -89,11 +88,13 @@ EOTEXT
       ));
     $revision = head($revisions);
 
+    $object_name = "D{$revision_id}";
+
     if (!$revision && !$is_finalize) {
       throw new ArcanistUsageException(
         pht(
           'Revision %s does not exist.',
-          "D{$revision_id}"));
+          $object_name));
     }
 
     $status_accepted = ArcanistDifferentialRevisionStatus::ACCEPTED;
@@ -104,15 +105,20 @@ EOTEXT
         pht(
           "Revision %s can not be closed. You can only close ".
           "revisions which have been 'accepted'.",
-          "D{$revision_id}"));
+          $object_name));
     }
 
     if ($revision) {
+      $revision_display = sprintf(
+        '%s %s',
+        $object_name,
+        $revision['title']);
+
       if (!$is_finalize && $revision['authorPHID'] != $this->getUserPHID()) {
         $prompt = pht(
-          'You are not the author of revision %s, '.
+          'You are not the author of revision "%s", '.
           'are you sure you want to close it?',
-          "D{$revision_id}");
+          $object_name);
         if (!phutil_console_confirm($prompt)) {
           throw new ArcanistUserAbortException();
         }
@@ -120,24 +126,42 @@ EOTEXT
 
       $actually_close = true;
       if ($is_finalize) {
-        if ($this->getRepositoryPHID() ||
-            $revision['status'] != $status_accepted) {
+        if ($this->getRepositoryPHID()) {
+          $actually_close = false;
+        } else if ($revision['status'] != $status_accepted) {
+          // See T13458. The server doesn't permit a transition to "Closed"
+          // over the API if the revision is not "Accepted". If we won't be
+          // able to close the revision, skip the attempt and print a
+          // message.
+
+          $this->writeWarn(
+            pht('OPEN REVISION'),
+            pht(
+              'Revision "%s" is not in state "Accepted", so it will '.
+              'be left open.',
+              $object_name));
+
           $actually_close = false;
         }
       }
-      if ($actually_close) {
-        $revision_name = $revision['title'];
 
-        echo pht(
-          "Closing revision %s '%s'...\n",
-          "D{$revision_id}",
-          $revision_name);
+      if ($actually_close) {
+        $this->writeInfo(
+          pht('CLOSE'),
+          pht(
+            'Closing revision "%s"...',
+            $revision_display));
 
         $conduit->callMethodSynchronous(
           'differential.close',
           array(
             'revisionID' => $revision_id,
           ));
+
+        $this->writeOkay(
+          pht('CLOSE'),
+          pht(
+            'Done, closed revision.'));
       }
     }
 
